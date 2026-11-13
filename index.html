@@ -29,8 +29,6 @@
     border-radius: 14px; padding: 12px 14px; font-weight: 600; font-size: 16px; }
   button:active { transform: scale(.97); }
   button:disabled { opacity: .4; }
-  #connectBtn { flex: 1; background: linear-gradient(90deg, #6b2bff, #ff2bd6); border: none; }
-  #connectBtn.connected { background: #1d3b2a; border: 1px solid #2f7a4f; }
   .status { font-size: 13px; color: var(--muted); margin-top: 8px; min-height: 18px; }
   .pill { width: 10px; height: 10px; border-radius: 50%; background: #555; display: inline-block; margin-right: 6px; }
   .pill.on { background: #3ddc84; box-shadow: 0 0 8px #3ddc84; }
@@ -59,19 +57,44 @@
   .powerRow button { flex: 1; }
   .help { color: var(--muted); font-size: 13px; line-height: 1.45; }
   .help code { color: #fff; }
+
+  /* Top bar + connection chip */
+  .topbar { position: sticky; top: 0; z-index: 10; margin: calc(-12px - env(safe-area-inset-top)) -16px 14px;
+    padding: calc(env(safe-area-inset-top) + 10px) 16px 10px; background: rgba(11,11,20,.92);
+    -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px); border-bottom: 1px solid var(--line);
+    display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+  .topbar h1 { margin: 0; font-size: 19px; }
+  #chip { display: flex; align-items: center; gap: 8px; padding: 9px 14px; border-radius: 999px; font-size: 14px; white-space: nowrap; }
+  #chip .d { width: 10px; height: 10px; border-radius: 50%; flex: none; }
+  #chip[data-s=off] { background: #3a1520; border-color: #7a2a3a; }
+  #chip[data-s=off] .d { background: #ff4d6a; }
+  #chip[data-s=busy] { background: #3a3015; border-color: #7a652a; }
+  #chip[data-s=busy] .d { background: #ffc53d; animation: pulse 1s infinite; }
+  #chip[data-s=on] { background: #15331f; border-color: #2a7a45; }
+  #chip[data-s=on] .d { background: #3ddc84; box-shadow: 0 0 8px #3ddc84; }
+  @keyframes pulse { 50% { opacity: .25; } }
+  #msg { font-size: 13px; color: var(--muted); margin: -6px 0 12px; min-height: 0; }
+  #msg:empty { display: none; }
+  #beatBtn.offline { outline: 3px dashed rgba(255,255,255,.55); outline-offset: -8px; }
+
+  /* Bottom sheet */
+  #scrim { position: fixed; inset: 0; background: rgba(0,0,0,.55); z-index: 20; display: none; }
+  #sheet { position: fixed; left: 0; right: 0; bottom: 0; z-index: 21; background: var(--panel); border-top: 1px solid var(--line);
+    border-radius: 22px 22px 0 0; padding: 18px 16px calc(env(safe-area-inset-bottom) + 18px); transform: translateY(105%); transition: transform .2s; }
+  #sheet.open { transform: none; }
+  #sheet h2 { font-size: 17px; margin: 0 0 4px; }
+  #sheet p { color: var(--muted); font-size: 13px; margin: 0 0 14px; line-height: 1.4; }
+  #sheet button { width: 100%; margin-bottom: 10px; }
+  #sheet .danger { background: #3a1520; border-color: #7a2a3a; }
 </style>
 </head>
 <body>
 
-<h1>🐧 Party Beat Lights</h1>
-<div class="sub">DayBetter strip controller</div>
-
-<div class="panel">
-  <div class="row">
-    <button id="connectBtn">Connect to lights</button>
-  </div>
-  <div class="status"><span id="dot" class="pill"></span><span id="statusText">Not connected</span></div>
+<div class="topbar">
+  <h1>🐧 Party Beat</h1>
+  <button id="chip" data-s="off"><span class="d"></span><span id="chipText">Tap to connect</span></button>
 </div>
+<div id="msg"></div>
 
 <div class="panel">
   <div class="label">Party Beat game</div>
@@ -102,7 +125,17 @@
 </div>
 
 <div class="panel help">
-  Open this page in the <b>Bluefy</b> browser (Safari can't do Bluetooth). Close the DayBetter app first. The strip only accepts one connection at a time.
+  Open this page in the <b>Bluefy</b> browser (Safari can't do Bluetooth). Close the DayBetter app and nRF Connect first: the strip accepts one connection at a time.
+  <span id="wakeTip"></span>
+</div>
+
+<div id="scrim"></div>
+<div id="sheet">
+  <h2 id="sheetTitle">Lights</h2>
+  <p id="sheetText"></p>
+  <button id="sheetPrimary"></button>
+  <button id="sheetSecondary" class="danger"></button>
+  <button id="sheetCancel">Cancel</button>
 </div>
 
 <script>
@@ -131,97 +164,184 @@ const FAMILIES = [
 ];
 
 // ---------- Bluetooth ----------
-let device = null, writeChar = null;
-let queue = [], sending = false, pendingColor = null;
-
 const $ = id => document.getElementById(id);
-function setStatus(text, ok) {
-  $('statusText').textContent = text;
-  $('dot').classList.toggle('on', !!ok);
-  $('connectBtn').classList.toggle('connected', !!ok);
-  $('connectBtn').textContent = ok ? 'Connected ✓ (tap to reconnect)' : 'Connect to lights';
-}
+let device = null, writeChar = null;
+let wantConnected = false;      // user intent: stay connected
+let state = 'off';              // off | connecting | on | reconnecting
+let retryTimer = null, retryDelay = 1000, connectingNow = false;
+// Latest pending values; sent when connected, kept through dropouts
+const pending = { power: null, bright: null, color: null };
+let sending = false;
+
 function errText(e) {
   if (!e) return 'unknown error';
   if (typeof e === 'string') return e;
-  return [e.name, e.message, e.code].filter(Boolean).join(': ') || String(e) || 'unknown error';
+  return [e.name, e.message].filter(Boolean).join(': ') || String(e);
+}
+function say(t) { $('msg').textContent = t || ''; }
+
+function setState(s, note) {
+  state = s;
+  const chip = $('chip');
+  chip.dataset.s = s === 'on' ? 'on' : (s === 'off' ? 'off' : 'busy');
+  $('chipText').textContent = {
+    off: 'Tap to connect', connecting: 'Connecting…', on: 'Connected', reconnecting: 'Reconnecting…'
+  }[s];
+  $('beatBtn').classList.toggle('offline', s !== 'on');
+  say(note);
+  if (s === 'on') keepAwake(); else releaseWake();
 }
 
-async function connect() {
-  if (!navigator.bluetooth) {
-    setStatus('Bluetooth not available here. Open this page in the Bluefy browser.', false);
-    return;
-  }
-  let stage = 'choosing device';
+async function pickDevice() {
+  if (!navigator.bluetooth) { setState('off', 'Bluetooth not available here. Open this page in the Bluefy browser.'); return; }
   try {
-    setStatus('Choose your strip (P065_…)', false);
-    device = await navigator.bluetooth.requestDevice({
+    const d = await navigator.bluetooth.requestDevice({
       filters: [{ namePrefix: 'P0' }],
       optionalServices: FAMILIES.flatMap(f => [f.svc, f.adv]),
     });
-    device.removeEventListener('gattserverdisconnected', onDisconnect);
-    device.addEventListener('gattserverdisconnected', onDisconnect);
-    stage = 'connecting';
-    await openGatt();
+    if (device) device.removeEventListener('gattserverdisconnected', onDrop);
+    device = d;
+    device.addEventListener('gattserverdisconnected', onDrop);
+    wantConnected = true;
+    retryDelay = 1000;
+    tryConnect('connecting');
   } catch (e) {
-    if (e && e.name === 'NotFoundError') setStatus('No device chosen. Is nRF Connect / the DayBetter app disconnected?', false);
-    else setStatus('Error while ' + stage + ': ' + errText(e) + '. Close nRF Connect and the DayBetter app, then try again.', false);
+    if (e && e.name === 'NotFoundError') setState('off', '');
+    else setState('off', 'Could not open the device list: ' + errText(e));
   }
 }
 
-async function openGatt() {
-  setStatus('Connecting…', false);
-  let server, lastErr;
-  for (let i = 0; i < 3; i++) {
-    try { server = await device.gatt.connect(); break; }
-    catch (e) { lastErr = e; await new Promise(r => setTimeout(r, 700)); }
-  }
-  if (!server) throw lastErr || new Error('could not connect');
-  setStatus('Finding light service…', false);
-  for (const f of FAMILIES) {
-    try {
-      const svc = await server.getPrimaryService(f.svc);
-      writeChar = await svc.getCharacteristic(f.write);
+async function tryConnect(label) {
+  if (!device || !wantConnected || connectingNow) return;
+  clearTimeout(retryTimer);
+  connectingNow = true;
+  setState(label, state === 'off' ? '' : $('msg').textContent);
+  try {
+    const server = await device.gatt.connect();
+    let found = false, lastErr;
+    for (const f of FAMILIES) {
       try {
-        const n = await svc.getCharacteristic(f.notify);
-        await n.startNotifications();
-      } catch (_) { /* replies are optional */ }
-      setStatus('Connected to ' + (device.name || 'lights'), true);
-      return;
-    } catch (e) { lastErr = e; }
+        const svc = await server.getPrimaryService(f.svc);
+        writeChar = await svc.getCharacteristic(f.write);
+        try { const n = await svc.getCharacteristic(f.notify); await n.startNotifications(); } catch (_) {}
+        found = true; break;
+      } catch (e) { lastErr = e; }
+    }
+    if (!found) throw new Error('light service not found (' + errText(lastErr) + ')');
+    if (!wantConnected) { try { device.gatt.disconnect(); } catch (_) {} return; }
+    retryDelay = 1000;
+    setState('on', '');
+    pump();                          // flush anything tapped while offline
+  } catch (e) {
+    writeChar = null;
+    scheduleRetry('Still trying… (' + errText(e) + '). Is another app connected to the strip?');
+  } finally {
+    connectingNow = false;
   }
-  throw new Error('light service not found (' + errText(lastErr) + ')');
 }
 
-async function onDisconnect() {
+function scheduleRetry(note) {
+  if (!wantConnected) return;
+  setState('reconnecting', note || '');
+  clearTimeout(retryTimer);
+  retryTimer = setTimeout(() => tryConnect('reconnecting'), retryDelay);
+  retryDelay = Math.min(retryDelay * 2, 10000);
+}
+
+function onDrop() {
   writeChar = null;
-  setStatus('Disconnected. Reconnecting…', false);
-  for (let i = 0; i < 3; i++) {
-    try { await openGatt(); if (writeChar) return; } catch (_) {}
-    await new Promise(r => setTimeout(r, 800));
-  }
-  setStatus('Disconnected. Tap Connect.', false);
+  if (wantConnected) { retryDelay = 1000; scheduleRetry('Connection dropped. Reconnecting automatically.'); }
+  else setState('off', '');
 }
 
-// Serialized writes; rapid color changes collapse to the latest one
-function send(bytes) { queue.push(bytes); pump(); }
-function sendColor(hex) { pendingColor = hex; pump(); }
+function disconnect() {
+  wantConnected = false;
+  clearTimeout(retryTimer);
+  writeChar = null;
+  try { if (device && device.gatt.connected) device.gatt.disconnect(); } catch (_) {}
+  setState('off', 'Disconnected. The strip is free for other apps.');
+}
+
+// When you come back to the page (e.g. after the phone slept), retry right away
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') {
+    if (state === 'on') keepAwake();
+    if (wantConnected && state !== 'on') { retryDelay = 1000; tryConnect('reconnecting'); }
+  }
+});
+
+// ---------- Sending ----------
+function setPending(key, val) { pending[key] = val; pump(); }
 async function pump() {
-  if (sending) return;
+  if (sending || !writeChar) return;
   sending = true;
   try {
-    while (queue.length || pendingColor) {
-      let bytes;
-      if (pendingColor) { bytes = frame(CMD.color, hexToRgb(pendingColor)); pendingColor = null; }
-      else bytes = queue.shift();
-      if (!writeChar) { queue = []; pendingColor = null; break; }
+    for (const key of ['power', 'bright', 'color']) {
+      if (pending[key] === null || !writeChar) continue;
+      const val = pending[key];
+      const bytes = key === 'power' ? frame(CMD.power, [val ? 1 : 0])
+                  : key === 'bright' ? frame(CMD.bright, [val])
+                  : frame(CMD.color, hexToRgb(val));
       try {
         if (writeChar.writeValueWithResponse) await writeChar.writeValueWithResponse(bytes);
         else await writeChar.writeValue(bytes);
-      } catch (e) { setStatus('Send failed: ' + e.message, !!writeChar); }
+        if (pending[key] === val) pending[key] = null;   // keep it if a newer value arrived meanwhile
+      } catch (e) {
+        break;                       // keep pending; the reconnect logic will flush it
+      }
     }
-  } finally { sending = false; }
+  } finally {
+    sending = false;
+    if (writeChar && (pending.power !== null || pending.bright !== null || pending.color !== null)) setTimeout(pump, 0);
+  }
 }
+function sendColor(hex) { setPending('color', hex); }
+
+// ---------- Screen wake lock ----------
+let wakeLock = null;
+async function keepAwake() {
+  if (!('wakeLock' in navigator)) {
+    $('wakeTip').textContent = ' For the party, set Settings → Display & Brightness → Auto-Lock to Never: if the phone locks, Bluetooth drops.';
+    return;
+  }
+  try { if (!wakeLock) { wakeLock = await navigator.wakeLock.request('screen'); wakeLock.addEventListener('release', () => { wakeLock = null; }); } }
+  catch (_) { $('wakeTip').textContent = ' For the party, set Auto-Lock to Never: if the phone locks, Bluetooth drops.'; }
+}
+function releaseWake() { try { if (wakeLock) wakeLock.release(); } catch (_) {} wakeLock = null; }
+
+// ---------- Chip + sheet ----------
+function openSheet(cfg) {
+  $('sheetTitle').textContent = cfg.title;
+  $('sheetText').textContent = cfg.text || '';
+  const p = $('sheetPrimary'), s2 = $('sheetSecondary');
+  p.style.display = cfg.primary ? '' : 'none';
+  s2.style.display = cfg.secondary ? '' : 'none';
+  if (cfg.primary) { p.textContent = cfg.primary[0]; p.onclick = () => { closeSheet(); cfg.primary[1](); }; }
+  if (cfg.secondary) { s2.textContent = cfg.secondary[0]; s2.onclick = () => { closeSheet(); cfg.secondary[1](); }; }
+  $('scrim').style.display = 'block';
+  requestAnimationFrame(() => $('sheet').classList.add('open'));
+}
+function closeSheet() { $('sheet').classList.remove('open'); $('scrim').style.display = 'none'; }
+$('scrim').onclick = closeSheet;
+$('sheetCancel').onclick = closeSheet;
+
+$('chip').onclick = () => {
+  const name = (device && device.name) || 'the strip';
+  if (state === 'off') {
+    if (device) openSheet({ title: 'Connect', text: 'Reconnect to ' + name + ', or choose a different strip.',
+      primary: ['Reconnect to ' + name, () => { wantConnected = true; retryDelay = 1000; tryConnect('connecting'); }],
+      secondary: ['Choose a different strip', pickDevice] });
+    else pickDevice();
+  } else if (state === 'on') {
+    openSheet({ title: 'Connected to ' + name, text: 'Disconnect to free the strip for the DayBetter app or nRF Connect.',
+      primary: ['Switch to a different strip', () => { disconnect(); pickDevice(); }],
+      secondary: ['Disconnect', disconnect] });
+  } else {
+    openSheet({ title: 'Reconnecting to ' + name, text: 'The page keeps trying in the background. Taps on BEAT! are remembered and sent when it reconnects.',
+      primary: ['Try again now', () => { retryDelay = 1000; tryConnect('reconnecting'); }],
+      secondary: ['Stop and disconnect', disconnect] });
+  }
+};
 
 // ---------- Colors ----------
 function hexToRgb(h) { h = h.replace('#', ''); return [0, 2, 4].map(i => parseInt(h.substr(i, 2), 16)); }
@@ -294,13 +414,13 @@ let briTimer = null;
 $('bri').addEventListener('input', e => {
   const v = +e.target.value; $('briVal').textContent = v;
   clearTimeout(briTimer);
-  briTimer = setTimeout(() => send(frame(CMD.bright, [v])), 60);
+  briTimer = setTimeout(() => setPending('bright', v), 60);
 });
-$('onBtn').onclick = () => send(frame(CMD.power, [1]));
-$('offBtn').onclick = () => send(frame(CMD.power, [0]));
-$('connectBtn').onclick = connect;
+$('onBtn').onclick = () => setPending('power', 1);
+$('offBtn').onclick = () => setPending('power', 0);
 
 renderGame();
+setState('off', '');
 </script>
 </body>
 </html>
