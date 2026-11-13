@@ -124,9 +124,10 @@ function frame(cmd, payload) {
 const CMD = { power: 0x11, bright: 0x13, color: 0x15 };
 
 // Known DayBetter service families: E065 (yours) and E031 (documented model)
+const u = n => '0000' + n.toString(16).padStart(4, '0') + '-0000-1000-8000-00805f9b34fb';
 const FAMILIES = [
-  { svc: 0xe065, write: 0xa065, notify: 0xf065, adv: 0xc065 },
-  { svc: 0xe031, write: 0xa031, notify: 0xf031, adv: 0xc031 },
+  { svc: u(0xe065), write: u(0xa065), notify: u(0xf065), adv: u(0xc065) },
+  { svc: u(0xe031), write: u(0xa031), notify: u(0xf031), adv: u(0xc031) },
 ];
 
 // ---------- Bluetooth ----------
@@ -140,31 +141,43 @@ function setStatus(text, ok) {
   $('connectBtn').classList.toggle('connected', !!ok);
   $('connectBtn').textContent = ok ? 'Connected ✓ (tap to reconnect)' : 'Connect to lights';
 }
+function errText(e) {
+  if (!e) return 'unknown error';
+  if (typeof e === 'string') return e;
+  return [e.name, e.message, e.code].filter(Boolean).join(': ') || String(e) || 'unknown error';
+}
 
 async function connect() {
   if (!navigator.bluetooth) {
     setStatus('Bluetooth not available here. Open this page in the Bluefy browser.', false);
     return;
   }
+  let stage = 'choosing device';
   try {
     setStatus('Choose your strip (P065_…)', false);
     device = await navigator.bluetooth.requestDevice({
-      filters: [
-        { namePrefix: 'P0' },
-        ...FAMILIES.map(f => ({ services: [f.adv] })),
-      ],
+      filters: [{ namePrefix: 'P0' }],
       optionalServices: FAMILIES.flatMap(f => [f.svc, f.adv]),
     });
+    device.removeEventListener('gattserverdisconnected', onDisconnect);
     device.addEventListener('gattserverdisconnected', onDisconnect);
+    stage = 'connecting';
     await openGatt();
   } catch (e) {
-    setStatus(e.name === 'NotFoundError' ? 'No device chosen' : 'Error: ' + e.message, false);
+    if (e && e.name === 'NotFoundError') setStatus('No device chosen. Is nRF Connect / the DayBetter app disconnected?', false);
+    else setStatus('Error while ' + stage + ': ' + errText(e) + '. Close nRF Connect and the DayBetter app, then try again.', false);
   }
 }
 
 async function openGatt() {
   setStatus('Connecting…', false);
-  const server = await device.gatt.connect();
+  let server, lastErr;
+  for (let i = 0; i < 3; i++) {
+    try { server = await device.gatt.connect(); break; }
+    catch (e) { lastErr = e; await new Promise(r => setTimeout(r, 700)); }
+  }
+  if (!server) throw lastErr || new Error('could not connect');
+  setStatus('Finding light service…', false);
   for (const f of FAMILIES) {
     try {
       const svc = await server.getPrimaryService(f.svc);
@@ -175,9 +188,9 @@ async function openGatt() {
       } catch (_) { /* replies are optional */ }
       setStatus('Connected to ' + (device.name || 'lights'), true);
       return;
-    } catch (_) { /* try next family */ }
+    } catch (e) { lastErr = e; }
   }
-  setStatus('Connected, but no DayBetter light service found', false);
+  throw new Error('light service not found (' + errText(lastErr) + ')');
 }
 
 async function onDisconnect() {
