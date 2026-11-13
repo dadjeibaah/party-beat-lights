@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>Party Beat Lights</title>
+<style>
+  :root {
+    --bg: #0b0b14;
+    --panel: #161626;
+    --line: #2a2a40;
+    --text: #f4f4fb;
+    --muted: #9a9ab5;
+    --a: #ff2bd6;
+    --b: #00e5ff;
+    --live: #ff2bd6;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Rounded", system-ui, sans-serif; }
+  body { padding: calc(env(safe-area-inset-top) + 12px) 16px calc(env(safe-area-inset-bottom) + 16px); }
+  h1 { font-size: 22px; margin: 4px 0 2px; letter-spacing: .3px; }
+  .sub { color: var(--muted); font-size: 13px; margin-bottom: 14px; }
+  .row { display: flex; gap: 10px; align-items: center; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 18px; padding: 14px; margin-bottom: 14px; }
+  .label { font-size: 12px; text-transform: uppercase; letter-spacing: 1px; color: var(--muted); margin-bottom: 10px; }
+  button { font: inherit; color: var(--text); background: #23233a; border: 1px solid var(--line);
+    border-radius: 14px; padding: 12px 14px; font-weight: 600; font-size: 16px; }
+  button:active { transform: scale(.97); }
+  button:disabled { opacity: .4; }
+  #connectBtn { flex: 1; background: linear-gradient(90deg, #6b2bff, #ff2bd6); border: none; }
+  #connectBtn.connected { background: #1d3b2a; border: 1px solid #2f7a4f; }
+  .status { font-size: 13px; color: var(--muted); margin-top: 8px; min-height: 18px; }
+  .pill { width: 10px; height: 10px; border-radius: 50%; background: #555; display: inline-block; margin-right: 6px; }
+  .pill.on { background: #3ddc84; box-shadow: 0 0 8px #3ddc84; }
+
+  /* Game */
+  #beatBtn { width: 100%; height: 42vh; min-height: 240px; border-radius: 28px; border: none;
+    font-size: 34px; font-weight: 800; color: #fff; text-shadow: 0 2px 10px rgba(0,0,0,.45);
+    background: var(--live); box-shadow: 0 0 40px var(--live); transition: background .08s, box-shadow .08s; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; }
+  #beatBtn small { font-size: 15px; font-weight: 600; opacity: .9; }
+  .gameColors { display: flex; gap: 10px; margin-top: 12px; }
+  .gc { flex: 1; position: relative; border-radius: 14px; border: 2px solid var(--line); padding: 10px; display: flex; align-items: center; gap: 10px; background: #1c1c30; }
+  .gc.active { border-color: #fff; box-shadow: 0 0 12px rgba(255,255,255,.35); }
+  .gc .sw { width: 34px; height: 34px; border-radius: 10px; flex: none; }
+  .gc span { font-size: 14px; font-weight: 600; }
+  .gc input { position: absolute; inset: 0; opacity: 0; width: 100%; height: 100%; }
+
+  /* Free color */
+  .swatches { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; }
+  .swatch { aspect-ratio: 1; border-radius: 14px; border: 2px solid transparent; padding: 0; }
+  .swatch.custom { position: relative; background: conic-gradient(red, yellow, lime, cyan, blue, magenta, red); }
+  .swatch.custom input { position: absolute; inset: 0; opacity: 0; width: 100%; height: 100%; }
+  .targetRow { display: flex; gap: 8px; margin-bottom: 12px; }
+  .targetRow button { flex: 1; font-size: 14px; padding: 10px 8px; }
+  .targetRow button.sel { background: #fff; color: #111; }
+  input[type=range] { width: 100%; accent-color: #ff2bd6; height: 32px; }
+  .powerRow button { flex: 1; }
+  .help { color: var(--muted); font-size: 13px; line-height: 1.45; }
+  .help code { color: #fff; }
+</style>
+</head>
+<body>
+
+<h1>🐧 Party Beat Lights</h1>
+<div class="sub">DayBetter strip controller</div>
+
+<div class="panel">
+  <div class="row">
+    <button id="connectBtn">Connect to lights</button>
+  </div>
+  <div class="status"><span id="dot" class="pill"></span><span id="statusText">Not connected</span></div>
+</div>
+
+<div class="panel">
+  <div class="label">Party Beat game</div>
+  <button id="beatBtn">BEAT! <small id="beatSub">Tap to switch color</small></button>
+  <div class="gameColors">
+    <label class="gc active" id="gcA"><div class="sw" id="swA"></div><span>Color 1</span><input type="color" id="colorA"></label>
+    <label class="gc" id="gcB"><div class="sw" id="swB"></div><span>Color 2</span><input type="color" id="colorB"></label>
+  </div>
+</div>
+
+<div class="panel">
+  <div class="label">Pick a color</div>
+  <div class="targetRow">
+    <button id="tLights" class="sel">Send to lights</button>
+    <button id="tA">Set Color 1</button>
+    <button id="tB">Set Color 2</button>
+  </div>
+  <div class="swatches" id="swatches"></div>
+</div>
+
+<div class="panel">
+  <div class="label">Brightness <span id="briVal">100</span>%</div>
+  <input type="range" id="bri" min="1" max="100" value="100">
+  <div class="row powerRow" style="margin-top:10px">
+    <button id="onBtn">On</button>
+    <button id="offBtn">Off</button>
+  </div>
+</div>
+
+<div class="panel help">
+  Open this page in the <b>Bluefy</b> browser (Safari can't do Bluetooth). Close the DayBetter app first. The strip only accepts one connection at a time.
+</div>
+
+<script>
+// ---------- Protocol ----------
+// Frame: A0 | cmd | len(payload+3) | payload | CRC16-MODBUS (little-endian)
+function crc16modbus(bytes) {
+  let crc = 0xFFFF;
+  for (const b of bytes) {
+    crc ^= b;
+    for (let i = 0; i < 8; i++) crc = (crc & 1) ? (crc >>> 1) ^ 0xA001 : crc >>> 1;
+  }
+  return crc;
+}
+function frame(cmd, payload) {
+  const body = [0xA0, cmd, payload.length + 3, ...payload];
+  const c = crc16modbus(body);
+  return new Uint8Array([...body, c & 0xFF, c >> 8]);
+}
+const CMD = { power: 0x11, bright: 0x13, color: 0x15 };
+
+// Known DayBetter service families: E065 (yours) and E031 (documented model)
+const FAMILIES = [
+  { svc: 0xe065, write: 0xa065, notify: 0xf065, adv: 0xc065 },
+  { svc: 0xe031, write: 0xa031, notify: 0xf031, adv: 0xc031 },
+];
+
+// ---------- Bluetooth ----------
+let device = null, writeChar = null;
+let queue = [], sending = false, pendingColor = null;
+
+const $ = id => document.getElementById(id);
+function setStatus(text, ok) {
+  $('statusText').textContent = text;
+  $('dot').classList.toggle('on', !!ok);
+  $('connectBtn').classList.toggle('connected', !!ok);
+  $('connectBtn').textContent = ok ? 'Connected ✓ (tap to reconnect)' : 'Connect to lights';
+}
+
+async function connect() {
+  if (!navigator.bluetooth) {
+    setStatus('Bluetooth not available here. Open this page in the Bluefy browser.', false);
+    return;
+  }
+  try {
+    setStatus('Choose your strip (P065_…)', false);
+    device = await navigator.bluetooth.requestDevice({
+      filters: [
+        { namePrefix: 'P0' },
+        ...FAMILIES.map(f => ({ services: [f.adv] })),
+      ],
+      optionalServices: FAMILIES.flatMap(f => [f.svc, f.adv]),
+    });
+    device.addEventListener('gattserverdisconnected', onDisconnect);
+    await openGatt();
+  } catch (e) {
+    setStatus(e.name === 'NotFoundError' ? 'No device chosen' : 'Error: ' + e.message, false);
+  }
+}
+
+async function openGatt() {
+  setStatus('Connecting…', false);
+  const server = await device.gatt.connect();
+  for (const f of FAMILIES) {
+    try {
+      const svc = await server.getPrimaryService(f.svc);
+      writeChar = await svc.getCharacteristic(f.write);
+      try {
+        const n = await svc.getCharacteristic(f.notify);
+        await n.startNotifications();
+      } catch (_) { /* replies are optional */ }
+      setStatus('Connected to ' + (device.name || 'lights'), true);
+      return;
+    } catch (_) { /* try next family */ }
+  }
+  setStatus('Connected, but no DayBetter light service found', false);
+}
+
+async function onDisconnect() {
+  writeChar = null;
+  setStatus('Disconnected. Reconnecting…', false);
+  for (let i = 0; i < 3; i++) {
+    try { await openGatt(); if (writeChar) return; } catch (_) {}
+    await new Promise(r => setTimeout(r, 800));
+  }
+  setStatus('Disconnected. Tap Connect.', false);
+}
+
+// Serialized writes; rapid color changes collapse to the latest one
+function send(bytes) { queue.push(bytes); pump(); }
+function sendColor(hex) { pendingColor = hex; pump(); }
+async function pump() {
+  if (sending) return;
+  sending = true;
+  try {
+    while (queue.length || pendingColor) {
+      let bytes;
+      if (pendingColor) { bytes = frame(CMD.color, hexToRgb(pendingColor)); pendingColor = null; }
+      else bytes = queue.shift();
+      if (!writeChar) { queue = []; pendingColor = null; break; }
+      try {
+        if (writeChar.writeValueWithResponse) await writeChar.writeValueWithResponse(bytes);
+        else await writeChar.writeValue(bytes);
+      } catch (e) { setStatus('Send failed: ' + e.message, !!writeChar); }
+    }
+  } finally { sending = false; }
+}
+
+// ---------- Colors ----------
+function hexToRgb(h) { h = h.replace('#', ''); return [0, 2, 4].map(i => parseInt(h.substr(i, 2), 16)); }
+function load(k, d) { try { return localStorage.getItem(k) || d; } catch (_) { return d; } }
+function save(k, v) { try { localStorage.setItem(k, v); } catch (_) {} }
+
+let colorA = load('pb_colorA', '#ff2bd6');
+let colorB = load('pb_colorB', '#00e5ff');
+let current = 'A';
+let target = 'lights';
+
+function renderGame() {
+  $('colorA').value = colorA; $('colorB').value = colorB;
+  $('swA').style.background = colorA; $('swB').style.background = colorB;
+  const live = current === 'A' ? colorA : colorB;
+  document.documentElement.style.setProperty('--live', live);
+  $('gcA').classList.toggle('active', current === 'A');
+  $('gcB').classList.toggle('active', current === 'B');
+  $('beatSub').textContent = 'Now: Color ' + (current === 'A' ? '1' : '2') + '. Tap to switch';
+}
+
+// Photosensitivity guard: at most ~2.5 color changes per second (under the 3 flashes/sec guideline)
+const MIN_SWITCH_MS = 400;
+let lastSwitch = 0;
+$('beatBtn').addEventListener('click', () => {
+  const now = Date.now();
+  if (now - lastSwitch < MIN_SWITCH_MS) return;
+  lastSwitch = now;
+  current = current === 'A' ? 'B' : 'A';
+  renderGame();
+  sendColor(current === 'A' ? colorA : colorB);
+});
+
+$('colorA').addEventListener('input', e => { colorA = e.target.value; save('pb_colorA', colorA); renderGame(); if (current === 'A') sendColor(colorA); });
+$('colorB').addEventListener('input', e => { colorB = e.target.value; save('pb_colorB', colorB); renderGame(); if (current === 'B') sendColor(colorB); });
+
+// Swatches
+const PRESETS = ['#ff0000', '#ff6a00', '#ffd400', '#00ff3c', '#00e5ff',
+                 '#0040ff', '#8a2bff', '#ff2bd6', '#ffffff'];
+const sw = $('swatches');
+PRESETS.forEach(c => {
+  const b = document.createElement('button');
+  b.className = 'swatch'; b.style.background = c; b.setAttribute('aria-label', c);
+  b.addEventListener('click', () => pick(c));
+  sw.appendChild(b);
+});
+const custom = document.createElement('label');
+custom.className = 'swatch custom';
+custom.innerHTML = '<input type="color" value="#ff2bd6" aria-label="Custom color">';
+custom.querySelector('input').addEventListener('input', e => pick(e.target.value));
+sw.appendChild(custom);
+
+function pick(c) {
+  if (target === 'A') { colorA = c; save('pb_colorA', c); renderGame(); if (current === 'A') sendColor(c); }
+  else if (target === 'B') { colorB = c; save('pb_colorB', c); renderGame(); if (current === 'B') sendColor(c); }
+  else sendColor(c);
+}
+function setTarget(t) {
+  target = t;
+  $('tLights').classList.toggle('sel', t === 'lights');
+  $('tA').classList.toggle('sel', t === 'A');
+  $('tB').classList.toggle('sel', t === 'B');
+}
+$('tLights').onclick = () => setTarget('lights');
+$('tA').onclick = () => setTarget('A');
+$('tB').onclick = () => setTarget('B');
+
+// Brightness & power
+let briTimer = null;
+$('bri').addEventListener('input', e => {
+  const v = +e.target.value; $('briVal').textContent = v;
+  clearTimeout(briTimer);
+  briTimer = setTimeout(() => send(frame(CMD.bright, [v])), 60);
+});
+$('onBtn').onclick = () => send(frame(CMD.power, [1]));
+$('offBtn').onclick = () => send(frame(CMD.power, [0]));
+$('connectBtn').onclick = connect;
+
+renderGame();
+</script>
+</body>
+</html>
